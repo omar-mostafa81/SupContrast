@@ -84,6 +84,15 @@ class SupConLoss(nn.Module):
         )
         mask = mask * logits_mask
 
+        # i = 0
+        # logits_i = logits[i]                # shape [2*bsz]
+        # mask_i   = mask[i].bool()           # which positions are positives
+        # num  = logits_i[mask_i]             # these are the “positive” similarities
+        # den  = torch.log( torch.exp(logits_i).sum() )
+        # print(f"[DBG] anchor 0:  pos_logits.min={num.min():.3f}  pos_logits.max={num.max():.3f}")
+        # print(f"[DBG] anchor 0:  log_denominator={den:.3f}")
+        # print(f"[DBG] anchor 0:  individual log_probs={ (logits_i - den)[mask_i][:5] }")
+
         # compute log_prob
         exp_logits = torch.exp(logits) * logits_mask
         log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True))

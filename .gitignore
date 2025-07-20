@@ -131,3 +131,7 @@ dmypy.json
 # Pyre type checker
 .pyre/
 save/
+
+# data
+ood_classifier_data/
+ood_pngs/

@@ -182,7 +182,9 @@ def set_model(opt):
 
     # enable synchronized Batch Normalization
     if opt.syncBN:
-        model = apex.parallel.convert_syncbn_model(model)
+        from torch.nn import SyncBatchNorm
+        model = SyncBatchNorm.convert_sync_batchnorm(model)
+        # model = apex.parallel.convert_syncbn_model(model)
 
     if torch.cuda.is_available():
         if torch.cuda.device_count() > 1:
@@ -217,6 +219,14 @@ def train(train_loader, model, criterion, optimizer, epoch, opt):
 
         # compute loss
         features = model(images)
+        # print("[DBG]  feats.shape=", features.shape)
+        # print("[DBG]  feats.mean={:.5f}  std={:.5f}".format(
+        #         features.mean().item(), features.std().item()))
+        # # if your head does ℓ₂‐normalize, also check the norms:
+        # norms = features.norm(dim=1)
+        # print("[DBG]  feats.norm: min={:.3f}  max={:.3f}".format(
+        #         norms.min().item(), norms.max().item()))
+
         f1, f2 = torch.split(features, [bsz, bsz], dim=0)
         features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
         if opt.method == 'SupCon':
@@ -234,7 +244,7 @@ def train(train_loader, model, criterion, optimizer, epoch, opt):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-
+       
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
