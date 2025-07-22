@@ -4,11 +4,11 @@ import sys
 import argparse
 import time
 import math
-
+import os
 import torch
 import torch.backends.cudnn as cudnn
-
-from main_ce import set_loader
+from torchvision import transforms, datasets
+# from main_ce import set_loader
 from util import AverageMeter
 from util import adjust_learning_rate, warmup_learning_rate, accuracy
 from util import set_optimizer
@@ -50,7 +50,11 @@ def parse_option():
     # model dataset
     parser.add_argument('--model', type=str, default='resnet50')
     parser.add_argument('--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100'], help='dataset')
+                        choices=['cifar10', 'cifar100', 'path'], help='dataset')
+    parser.add_argument('--mean', type=str, help='mean of dataset in path in form of str tuple')
+    parser.add_argument('--std', type=str, help='std of dataset in path in form of str tuple')
+    parser.add_argument('--data_folder', type=str, default=None, help='path to custom dataset')
+    parser.add_argument('--num_classes', type=int, default=None, help='number of classes')
 
     # other setting
     parser.add_argument('--cosine', action='store_true',
@@ -62,9 +66,18 @@ def parse_option():
                         help='path to pre-trained model')
 
     opt = parser.parse_args()
+    
+    # check if dataset is path that passed required arguments
+    if opt.dataset == 'path':
+        assert opt.data_folder is not None \
+            and opt.mean is not None \
+            and opt.std is not None \
+            and opt.num_classes is not None 
 
     # set the path according to the environment
-    opt.data_folder = './datasets/'
+    if opt.data_folder is None:
+        opt.data_folder = './datasets/'
+    opt.model_path = './save/Linear/{}_models'.format(opt.dataset)
 
     iterations = opt.lr_decay_epochs.split(',')
     opt.lr_decay_epochs = list([])
@@ -94,8 +107,14 @@ def parse_option():
         opt.n_cls = 10
     elif opt.dataset == 'cifar100':
         opt.n_cls = 100
+    elif opt.dataset == 'path':
+        opt.n_cls = opt.num_classes
     else:
         raise ValueError('dataset not supported: {}'.format(opt.dataset))
+
+    opt.save_folder = os.path.join(opt.model_path, opt.model_name, '2')
+    if not os.path.isdir(opt.save_folder):
+        os.makedirs(opt.save_folder)
 
     return opt
 
@@ -106,7 +125,7 @@ def set_model(opt):
 
     classifier = LinearClassifier(name=opt.model, num_classes=opt.n_cls)
 
-    ckpt = torch.load(opt.ckpt, map_location='cpu')
+    ckpt = torch.load(opt.ckpt, map_location='cpu', weights_only=False)
     state_dict = ckpt['model']
 
     if torch.cuda.is_available():
@@ -159,7 +178,7 @@ def train(train_loader, model, classifier, criterion, optimizer, epoch, opt):
 
         # update metric
         losses.update(loss.item(), bsz)
-        acc1, acc5 = accuracy(output, labels, topk=(1, 5))
+        acc1, acc5 = accuracy(output, labels, topk=(1, 2))
         top1.update(acc1[0], bsz)
 
         # SGD
@@ -207,7 +226,7 @@ def validate(val_loader, model, classifier, criterion, opt):
 
             # update metric
             losses.update(loss.item(), bsz)
-            acc1, acc5 = accuracy(output, labels, topk=(1, 5))
+            acc1, acc5 = accuracy(output, labels, topk=(1, 2))
             top1.update(acc1[0], bsz)
 
             # measure elapsed time
@@ -225,6 +244,64 @@ def validate(val_loader, model, classifier, criterion, opt):
     print(' * Acc@1 {top1.avg:.3f}'.format(top1=top1))
     return losses.avg, top1.avg
 
+def set_loader(opt):
+    # construct data loader
+    if opt.dataset == 'cifar10':
+        mean = (0.4914, 0.4822, 0.4465)
+        std = (0.2023, 0.1994, 0.2010)
+    elif opt.dataset == 'cifar100':
+        mean = (0.5071, 0.4867, 0.4408)
+        std = (0.2675, 0.2565, 0.2761)
+    elif opt.dataset == 'path':
+        mean = eval(opt.mean)
+        std = eval(opt.std)
+    else:
+        raise ValueError('dataset not supported: {}'.format(opt.dataset))
+    normalize = transforms.Normalize(mean=mean, std=std)
+
+    train_transform = transforms.Compose([
+        transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    val_transform = transforms.Compose([
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    if opt.dataset == 'cifar10':
+        train_dataset = datasets.CIFAR10(root=opt.data_folder,
+                                         transform=train_transform,
+                                         download=True)
+        val_dataset = datasets.CIFAR10(root=opt.data_folder,
+                                       train=False,
+                                       transform=val_transform)
+    elif opt.dataset == 'cifar100':
+        train_dataset = datasets.CIFAR100(root=opt.data_folder,
+                                          transform=train_transform,
+                                          download=True)
+        val_dataset = datasets.CIFAR100(root=opt.data_folder,
+                                        train=False,
+                                        transform=val_transform)
+    elif opt.dataset == 'path':
+        train_dataset = datasets.ImageFolder(root=opt.data_folder,
+                                            transform=val_transform)
+        val_dataset = datasets.ImageFolder(root=opt.data_folder,
+                                           transform=val_transform)
+    else:
+        raise ValueError(opt.dataset)
+
+    train_sampler = None
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=opt.batch_size, shuffle=(train_sampler is None),
+        num_workers=opt.num_workers, pin_memory=True, sampler=train_sampler)
+    val_loader = torch.utils.data.DataLoader(
+        val_dataset, batch_size=256, shuffle=False,
+        num_workers=8, pin_memory=True)
+
+    return train_loader, val_loader
 
 def main():
     best_acc = 0
@@ -256,8 +333,29 @@ def main():
         if val_acc > best_acc:
             best_acc = val_acc
 
+        if epoch % opt.save_freq == 0:
+            save_file = os.path.join(
+                opt.save_folder, 'ckpt_epoch_{epoch}.pth'.format(epoch=epoch))
+            save_model(model, classifier, optimizer, opt, epoch, save_file)
+
+    # save the last model
+    save_file = os.path.join(
+        opt.save_folder, 'last.pth')
+    save_model(model, classifier, optimizer, opt, opt.epochs, save_file)
+
     print('best accuracy: {:.2f}'.format(best_acc))
 
+def save_model(model, classifier, optimizer, opt, epoch, save_file):
+    print(f'==> Saving to {save_file}')
+    state = {
+        'opt': opt,
+        'model': model.state_dict(),
+        'classifier': classifier.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'epoch': epoch,
+    }
+    torch.save(state, save_file)
+    del state
 
 if __name__ == '__main__':
     main()

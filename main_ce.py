@@ -52,7 +52,11 @@ def parse_option():
     # model dataset
     parser.add_argument('--model', type=str, default='resnet50')
     parser.add_argument('--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100'], help='dataset')
+                        choices=['cifar10', 'cifar100', 'path'], help='dataset')
+    parser.add_argument('--mean', type=str, help='mean of dataset in path in form of str tuple')
+    parser.add_argument('--std', type=str, help='std of dataset in path in form of str tuple')
+    parser.add_argument('--data_folder', type=str, default=None, help='path to custom dataset')
+    parser.add_argument('--num_classes', type=str, default=None, help='number of classes')
 
     # other setting
     parser.add_argument('--cosine', action='store_true',
@@ -66,8 +70,6 @@ def parse_option():
 
     opt = parser.parse_args()
 
-    # set the path according to the environment
-    opt.data_folder = './datasets/'
     opt.model_path = './save/SupCon/{}_models'.format(opt.dataset)
     opt.tb_path = './save/SupCon/{}_tensorboard'.format(opt.dataset)
 
@@ -153,6 +155,12 @@ def set_loader(opt):
         val_dataset = datasets.CIFAR100(root=opt.data_folder,
                                         train=False,
                                         transform=val_transform)
+    elif opt.dataset == 'path':
+        train_dataset = datasets.ImageFolder(root=opt.data_folder,
+                                            transform=val_transform)
+        val_dataset = datasets.ImageFolder(root=opt.data_folder,
+                                           train = False,
+                                           transform=val_transform)
     else:
         raise ValueError(opt.dataset)
 
